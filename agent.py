@@ -36,7 +36,7 @@ SYSTEM_PROMPT = (
 _KNOWN_TOOLS = {
     "list_directory", "read_file", "write_file", "search_files",
     "get_system_info", "list_processes", "run_command",
-    "fetch_url", "open_url",
+    "fetch_url", "open_url", "bing_search",
 }
 _RE_CODE_JSON = re.compile(r"```(?:json|tool_call|tool)?\s*(\{.*?\})\s*```", re.DOTALL | re.I)
 _RE_TOOL_TAG = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL | re.I)

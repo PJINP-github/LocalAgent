@@ -21,7 +21,7 @@ SAFE_ROOTS = [
 ENABLED_TOOLS = {
     "list_directory", "read_file", "write_file", "search_files",
     "get_system_info", "list_processes", "run_command",
-    "fetch_url", "open_url",
+    "fetch_url", "open_url", "bing_search",
 }
 
 
@@ -206,6 +206,83 @@ def fetch_url(url, max_chars=4000):
         return f"[错误] {e}"
 
 
+# ===== 新增：Bing 搜索 =====
+
+def bing_search(query, max_results=8):
+    """
+    用 Bing 搜索，返回前 N 条结果的标题、摘要和链接。
+    """
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return "[错误] 需要安装 requests 和 beautifulsoup4"
+
+    try:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        }
+        url = "https://www.bing.com/search"
+        params = {"q": query, "count": str(max_results * 2)}
+        resp = requests.get(url, headers=headers, params=params, timeout=20)
+        resp.raise_for_status()
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results = []
+
+        # Bing 搜索结果主要在 <li class="b_algo"> 里
+        for item in soup.select("li.b_algo"):
+            if len(results) >= max_results:
+                break
+            h2 = item.find("h2")
+            if not h2:
+                continue
+            a = h2.find("a")
+            if not a:
+                continue
+            title = h2.get_text(strip=True)
+            link = a.get("href", "").strip()
+            if not link.startswith("http"):
+                continue
+
+            caption = item.find("div", class_="b_caption")
+            snippet = ""
+            if caption:
+                p = caption.find("p")
+                if p:
+                    snippet = p.get_text(strip=True)
+            if not snippet:
+                p = item.find("p")
+                if p:
+                    snippet = p.get_text(strip=True)
+
+            results.append({
+                "title": title,
+                "url": link,
+                "snippet": snippet[:300],
+            })
+
+        if not results:
+            return f"[未找到结果] 查询：{query}"
+
+        lines = [f"Bing 搜索：{query}", f"共 {len(results)} 条结果", ""]
+        for i, r in enumerate(results, 1):
+            lines.append(f"{i}. {r['title']}")
+            lines.append(f"   链接：{r['url']}")
+            if r["snippet"]:
+                lines.append(f"   摘要：{r['snippet']}")
+            lines.append("")
+        return "\n".join(lines).strip()
+
+    except Exception as e:
+        return f"[错误] Bing 搜索失败：{e}"
+
+
 # ===== Tool Schemas =====
 
 _ALL_SCHEMAS = [
@@ -218,6 +295,7 @@ _ALL_SCHEMAS = [
     {"type": "function", "function": {"name": "run_command", "description": "执行白名单内的命令。", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
     {"type": "function", "function": {"name": "fetch_url", "description": "抓取网页并提取纯文本。", "parameters": {"type": "object", "properties": {"url": {"type": "string"}, "max_chars": {"type": "integer"}}, "required": ["url"]}}},
     {"type": "function", "function": {"name": "open_url", "description": "用默认浏览器打开网页。", "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}}},
+    {"type": "function", "function": {"name": "bing_search", "description": "用 Bing 搜索引擎查询网页信息，返回前几条结果的标题、摘要和链接。", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "搜索关键词"}, "max_results": {"type": "integer", "description": "返回结果数，默认 8"}}, "required": ["query"]}}},
 ]
 
 
@@ -235,6 +313,7 @@ TOOL_REGISTRY = {
     "run_command": run_command,
     "fetch_url": fetch_url,
     "open_url": open_url,
+    "bing_search": bing_search,
 }
 
 
