@@ -1,0 +1,69 @@
+# ============================================================
+# codeLook 项目快照配置
+# ============================================================
+# 三类目录：
+#   exclude_dirs       —— 路径和内容都不输出
+#   skip_content_dirs  —— 只输出路径，不读内容
+#   其他               —— 读路径 + 读内容（受 default_extensions 限制）
+#
+# 路径统一用"相对项目根 + 正斜杠"，不要写绝对路径。
+# ============================================================
+
+# ---------- 输出 ----------
+split_size: 100000
+segments_dir: segments
+compact: true   # 去掉空行和行尾空白
+
+# ---------- 全局默认扩展名 ----------
+# 只有这些扩展名的文件（在未排除、未跳过的目录里）才会真正读内容
+default_extensions: [py, rs, md, yaml]
+
+# ---------- 完全排除：路径和内容都不输出 ----------
+exclude_dirs:
+  # 编译产物 / 版本控制 / AI 工具元数据
+  - target
+  - .git
+  - .agents
+  - .codex
+  # 运行期缓存与临时目录
+  - .portal_recycle
+  - .portal_tmp
+  - .runtime-cache
+  - .chromium_profile_linux
+  - __pycache__
+  # 浏览器 / 虚拟环境
+  - chrome
+  - chromium_user_data
+  - venv
+  - venv_linux
+  - python3.14_install
+  # 运行期产出
+  - portal_inputs
+  - portal_outputs
+  - newwrap
+  - output
+  # 其他不关心的目录
+  - images
+  - docker
+  - sources
+  - tests
+  - venv_linux
+  - __pycache__
+  - .local-agent
+  - Qwen3-Coder-30B-A3B-Instruct-UD-IQ2_M
+  - tools
+
+
+# ---------- 只输出路径，不读内容 ----------
+skip_content_dirs:
+  - sources
+
+# ---------- 精细控制（可选） ----------
+# 用来在 default_extensions 之外，为某些具体目录单独指定扩展名。
+# 只有当文件不在 skip_content_dirs 命中范围时，content_rules 才生效。
+# 按顺序应用，越靠后优先级越高。
+content_rules: []
+# 示例：
+# content_rules:
+#   - prefix: model/Offline_Package_Organization-tag-0.0.12+python
+#     extensions: [py, yaml, json]
