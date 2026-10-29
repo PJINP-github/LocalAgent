@@ -14,8 +14,8 @@ $env:PYTHONIOENCODING = "utf-8"
 
 Set-Location $PSScriptRoot
 
-# ---- 默认模型存储目录（不再回退到 %USERPROFILE%\.ollama\models）----
-$DEFAULT_MODELS_PATH = "C:\software\LocalAgent\sources\models"
+# ---- 默认模型存储目录（相对项目根，移植后自动跟随）----
+$DEFAULT_MODELS_PATH = Join-Path $PSScriptRoot "sources\models"
 
 # ===== 日志函数 =====
 function Write-Step($msg) { Write-Host "[*] $msg" -ForegroundColor Cyan }
@@ -46,7 +46,7 @@ function Get-OllamaDirFromConfig {
 
 # ============================================================
 #  查找 ollama.exe
-#  1. config.json 的 ollama_dir（用户可改）
+#  1. config.json 的 ollama_dir（用户可改，支持相对/绝对）
 #  2. PATH
 #  3. 旧默认安装路径
 # ============================================================
@@ -54,6 +54,10 @@ function Find-OllamaExe {
     # 1. config.json
     $dir = Get-OllamaDirFromConfig
     if ($dir) {
+        # 相对路径 → 相对项目根
+        if (-not [System.IO.Path]::IsPathRooted($dir)) {
+            $dir = Join-Path $PSScriptRoot $dir
+        }
         if ($dir -match '\.exe\s*$') {
             if (Test-Path $dir) { return $dir }
             Write-Info "config.json 的 ollama_dir 指向 exe 但不存在：$dir"
@@ -252,7 +256,7 @@ function Test-Prereqs {
         } else {
             Write-Info "config.json 里未设置 ollama_dir"
         }
-        Write-Info "请在 config\config.json 中设置：""ollama_dir"": ""C:\\software\\ollama-windows-amd64"""
+        Write-Info "请在 config\config.json 中设置：""ollama_dir"": ""sources\\ollama""（相对）或绝对路径"
         $ok = $false
     }
 
@@ -444,7 +448,7 @@ $lastModel = $cfg.model
 # ============================================================
 #  模型存储路径（自愈 OLLAMA_MODELS）
 #  优先级：ollama.yaml 的 models_path → 内置默认
-#  不再使用 %USERPROFILE%\.ollama\models
+#  相对路径按项目根解析
 # ============================================================
 $ollamaYaml = Join-Path $PSScriptRoot "config\ollama.yaml"
 $modelsPath = ""
@@ -456,6 +460,11 @@ if (Test-Path $ollamaYaml) {
             $modelsPath = $Matches[1].Trim()
         }
     } catch {}
+}
+
+# 相对路径按项目根解析
+if ($modelsPath -and -not [System.IO.Path]::IsPathRooted($modelsPath)) {
+    $modelsPath = Join-Path $PSScriptRoot $modelsPath
 }
 
 # 清理指向已不存在目录的持久化 OLLAMA_MODELS（避免旧用户目录干扰）
@@ -599,7 +608,7 @@ if (-not $ollamaExe) {
     } else {
         Write-Info "config.json 里未设置 ollama_dir"
     }
-    Write-Info "请在 config\config.json 中设置：""ollama_dir"": ""C:\\software\\ollama-windows-amd64"""
+    Write-Info "请在 config\config.json 中设置：""ollama_dir"": ""sources\\ollama""（相对）或绝对路径"
     Read-Host "按回车退出"
     exit 1
 }
@@ -690,12 +699,59 @@ if (-not (Test-Path $pythonExe)) {
     exit 1
 }
 
-& $pythonExe -u -m src.agent
+# 记录 ollama serve 的 PID（精确清理用）
+$script:OllamaServePid = 0
+try {
+    $conn = Get-NetTCPConnection -LocalPort 11434 -State Listen -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+    if ($conn) { $script:OllamaServePid = $conn.OwningProcess }
+} catch {}
+
+$agentExitCode = 0
+$agentInterrupted = $false
+try {
+    & $pythonExe -u -m src.agent
+    $agentExitCode = $LASTEXITCODE
+    if ($null -eq $agentExitCode) { $agentExitCode = 0 }
+}
+catch [System.Management.Automation.PipelineStoppedException] {
+    Write-Warn "Agent 被 Ctrl+C 中断"
+    $agentInterrupted = $true
+    $agentExitCode = 130
+}
+catch {
+    Write-Warn "Agent 异常退出: $($_.Exception.Message)"
+    $agentExitCode = 1
+}
+finally {
+    Write-Host ""
+    $reason = if ($agentInterrupted) { "Ctrl+C" } else { "exit=$agentExitCode" }
+    Write-Step "[5/5] Agent 已退出（$reason），清理 Ollama 进程..."
+
+    # ① 精确：按 PID 杀进程树（含 llama-server 子进程）
+    if ($script:OllamaServePid -gt 0) {
+        Write-Info "按 PID 清理进程树: $($script:OllamaServePid)"
+        try { & taskkill /F /T /PID $script:OllamaServePid 2>&1 | Out-Null } catch {}
+    }
+
+    # ② 兜底：按名字清所有 ollama / llama 进程
+    try {
+        Clear-OllamaProcesses -MaxWaitSeconds 30 -SharedMemWarnGB 3.0 | Out-Null
+    } catch {
+        Write-Warn "Clear-OllamaProcesses 失败，taskkill 兜底"
+        foreach ($n in @(
+            "ollama.exe", "ollama app.exe",
+            "llama-server.exe", "llama_server.exe",
+            "ollama_llama_server.exe",
+            "ollama-runner.exe", "ollama_runner.exe"
+        )) {
+            try { & taskkill /F /T /IM $n 2>&1 | Out-Null } catch {}
+        }
+    }
+    Write-OK "清理完成"
+}
 
 Write-Host ""
 Write-Host "Agent 已退出。" -ForegroundColor Cyan
-
-Write-Step "[5/5] Agent 退出后清理 Ollama 进程..."
-Clear-OllamaProcesses -MaxWaitSeconds 30 -SharedMemWarnGB 3.0 | Out-Null
 
 Read-Host "按回车关闭窗口"

@@ -3,6 +3,7 @@ import json
 import os
 import re
 from datetime import datetime
+from ..common.paths import resolve
 
 
 def split_thinking(text: str):
@@ -25,15 +26,15 @@ def clean_output(text: str) -> str:
 class MemoryManager:
     def __init__(self, path=None, llm=None):
         if path is None:
-            path = str(Path(__file__).resolve().parents[2] / "config" / "memory.json")
-        self.path = os.path.expanduser(path)
+            path = "config/memory.json"
+        self.path = str(resolve(path))
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         self.llm = llm
         self.data = self._load()
         self.compress_threshold = 20
 
     def switch_path(self, new_path: str):
-        self.path = os.path.expanduser(new_path)
+        self.path = str(resolve(new_path))
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         self.data = self._load()
         print(f"[记忆文件已切换] {self.path}")

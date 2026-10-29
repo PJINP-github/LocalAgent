@@ -47,9 +47,8 @@ CONFIG_PATH = PROJECT_ROOT / "config" / "ollama.yaml"
 AGENT_CONFIG_PATH = PROJECT_ROOT / "config" / "config.json"
 
 # ---- 默认模型存储目录（不再回退到用户目录）----
-DEFAULT_MODELS_PATH = r"C:\software\LocalAgent\sources\models"
-
-
+DEFAULT_MODELS_REL = "sources/models"
+DEFAULT_MODELS_PATH = str(PROJECT_ROOT / DEFAULT_MODELS_REL)
 # ---------------- ANSI 颜色 ----------------
 class C:
     RESET = "\033[0m"
@@ -77,7 +76,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # 若需为 ollama_manager 单独指定，可在此填完整 exe 路径
         "executable": "",
         # 模型存储目录。默认指向项目内 sources/models，不再使用用户 .ollama 目录
-        "models_path": DEFAULT_MODELS_PATH,
+        "models_path": DEFAULT_MODELS_REL,
         "host": "127.0.0.1:11434",
     },
     "gpu": {
@@ -210,7 +209,7 @@ def build_env(cfg) -> dict:
 
     env["OLLAMA_HOST"] = o["host"]
     # 模型目录：为空则用内置默认；不再回退到用户目录
-    models_path = (o.get("models_path") or "").strip() or DEFAULT_MODELS_PATH
+    models_path = _models_dir(o)
     env["OLLAMA_MODELS"] = models_path
 
     if cpu:
@@ -500,7 +499,7 @@ def show_status(cfg):
 
     cprint("[模型存储]", C.BOLD)
     yaml_models = cfg["ollama"].get("models_path", "").strip() or "（空）"
-    effective_models = (cfg["ollama"].get("models_path") or "").strip() or DEFAULT_MODELS_PATH
+    effective_models = _models_dir(cfg)
     cprint(f"  ollama.yaml models_path = {yaml_models}", C.GRAY)
     cprint(f"  实际 OLLAMA_MODELS      = {effective_models}",
            C.GREEN if Path(effective_models).exists() else C.YELLOW)
@@ -602,7 +601,7 @@ def start_service(cfg):
         return
 
     # ---- 确保模型目录存在 ----
-    models_path = (cfg["ollama"].get("models_path") or "").strip() or DEFAULT_MODELS_PATH
+    models_path = _models_dir(cfg)
     try:
         Path(models_path).mkdir(parents=True, exist_ok=True)
     except Exception as e:
@@ -750,7 +749,7 @@ def show_menu(cfg):
     resolved = find_ollama(cfg) or "（未找到 ollama.exe）"
     cprint(f"  Ollama: {resolved}",
            C.GRAY if resolved != "（未找到 ollama.exe）" else C.RED)
-    models_eff = (cfg["ollama"].get("models_path") or "").strip() or DEFAULT_MODELS_PATH
+    models_eff = _models_dir(cfg)
     cprint(f"  模型目录: {models_eff}", C.GRAY)
     if shared >= 0:
         cprint(f"  共享显存: {shared} GB", C.GRAY)

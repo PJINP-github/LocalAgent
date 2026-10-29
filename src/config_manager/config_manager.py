@@ -15,14 +15,15 @@ DEFAULT_CONFIG = {
     # 修改 ollama 安装位置时，只改这里即可：
     #   - start-kurama.ps1 的 Find-OllamaExe 会读它
     #   - src/ollama_manager/ollama_manager.py 的 find_ollama 也会读它
-    "ollama_dir": r"C:\software\ollama-windows-amd64",
+    "ollama_dir": "sources/ollama",
+    "models_path": "sources/models",
     "available_models": [
         "qwen2.5-coder-4k",
         "qwen2.5-coder-8k",
         "qwen2.5-coder-16k",
         "qwen2.5-coder-32k",
     ],
-    "memory_path": str(_MEMORY_FILE),
+    "memory_path": "config/memory.json",
     "temperature": 0.7,
     "num_ctx": 32768,
     "repeat_penalty": 1.15,
