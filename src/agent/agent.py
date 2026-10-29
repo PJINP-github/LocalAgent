@@ -8,6 +8,8 @@ from langchain_ollama import ChatOllama
 
 from ..config_manager import ConfigManager, first_run_setup, list_ollama_models
 from ..memory_manager import MemoryManager
+from ..memory_manager.ms_manager import MemorySystemManager
+from ..memory_manager.ms_ui import interactive_select
 from .. import tools as tools_module
 
 try:
@@ -300,33 +302,33 @@ def _show_overplus(config):
 
 
 # ===== 新增：记忆轮廓 =====
-def _show_adumbration(memory, config):
+def _show_adumbration(memory, ms_mgr):
     data = memory.data
+    meta = ms_mgr._meta(ms_mgr.active_id) or {}
     summary = (data.get("summary") or "").strip()
     recent = data.get("recent_messages", [])
     total_turns = data.get("total_turns", 0)
     topics = data.get("topics", [])
-
     if summary:
         summary_short = summary[:60] + ("..." if len(summary) > 60 else "")
     else:
         summary_short = "（空）"
-
     enabled_cnt = len(tools_module.ENABLED_TOOLS)
     total_cnt = len(tools_module.TOOL_REGISTRY)
-
     print(f"\n[记忆轮廓]")
+    print(f"  记忆系统  : {meta.get('name', '?')} ({meta.get('id', '?')})")
+    print(f"  描述      : {meta.get('description') or '（暂无）'}")
     print(f"  长期摘要  : {summary_short}")
     print(f"  近期对话  : {len(recent)} 条  (注入最近 6 条)")
     print(f"  累计轮数  : {total_turns}  (每 20 轮压缩一次)")
     print(f"  话题标签  : {', '.join(topics) if topics else '（无）'}")
     print(f"  启用工具  : {enabled_cnt} / {total_cnt}")
-    print(f"  记忆文件  : {memory.path}")
+    print(f"  最后调用  : {meta.get('last_active_at', '?')}")
     print()
 
 
 # ===== 命令处理 =====
-def handle_command(cmd, config, memory):
+def handle_command(cmd, config, ms_mgr):
     parts = cmd.strip().split(maxsplit=2)
     c = parts[0].lower()
 
@@ -336,7 +338,12 @@ def handle_command(cmd, config, memory):
   /overplus              显示上下文剩余 token
   /model <name>          切换模型
   /set <key> <value>     设置参数（temperature, num_ctx, think 等）
-  /memory <path>         切换记忆文件
+  /sms                   记忆系统开关
+  /sms show              记忆系统列表（←→ 翻页，1-5 选择）
+  /sms new <name>        新建记忆系统
+  /sms <N>               切换到第 N 个
+  /sms rm <id>           删除指定 id
+  /memory <path>         (已废弃) 使用 /sms
   /config                显示当前配置
   /config-edit           重新进入配置向导
   /models                列出可用模型
@@ -374,10 +381,58 @@ def handle_command(cmd, config, memory):
             print(f"[错误] 无效的值：{val}")
         return True
 
-    if c == "/memory" and len(parts) >= 2:
-        memory.switch_path(parts[1])
-        config.set("memory_path", parts[1])
-        config.save()
+    if c == "/sms":
+        if len(parts) == 1:
+            print(f"[记忆系统] {ms_mgr.toggle()}")
+            return True
+        sub = parts[1].lower()
+        if sub == "show":
+            picked = interactive_select(ms_mgr)
+            if picked:
+                ms_mgr.activate(picked)
+                meta = ms_mgr._meta(picked) or {}
+                print(f"[已激活] {meta.get('name', '?')} ({picked})")
+            return True
+        if sub == "new":
+            name = (parts[2] if len(parts) >= 3 else "").strip()
+            if not name:
+                print("[错误] 用法：/sms new <名称>")
+                return True
+            sid = ms_mgr.create(name)
+            print(f"[已创建并激活] {name} ({sid})")
+            return True
+        if sub == "rm":
+            sid = (parts[2] if len(parts) >= 3 else "").strip()
+            if not sid:
+                print("[错误] 用法：/sms rm <id>")
+                return True
+            meta = ms_mgr._meta(sid)
+            if not meta:
+                print(f"[错误] 未找到 id={sid}")
+                return True
+            if ms_mgr.delete(sid):
+                print(f"[已删除] {meta['name']} ({sid})")
+            else:
+                print("[错误] 删除失败")
+            return True
+        if sub.isdigit():
+            n = int(sub)
+            systems = ms_mgr.list_systems()
+            if 1 <= n <= len(systems):
+                sid = systems[n - 1]["id"]
+                ms_mgr.activate(sid)
+                print(f"[已激活] {systems[n - 1]['name']} ({sid})")
+            else:
+                print(f"[错误] 序号越界（1-{len(systems)}）")
+            return True
+        print("[错误] 未知子命令。用 /sms show")
+        return True
+
+    if c == "/memory":
+        print("[已废弃] /memory 已由 /sms 取代，请使用：")
+        print("  /sms show        交互式选择")
+        print("  /sms new <name>  新建")
+        print("  /sms rm <id>     删除")
         return True
 
     if c == "/config":
@@ -444,9 +499,9 @@ def main():
         tools_module.set_enabled_tools(enabled)
 
     model = config.get("model")
-    memory = MemoryManager(path=config.get("memory_path"), llm=ChatOllama(model=model))
-
-    print(f"\nKurama | 模型：{model} | 记忆：{memory.path}")
+    llm = ChatOllama(model=model)
+    ms_mgr = MemorySystemManager(config, llm=llm)
+    print(f"\nKurama | 模型：{model} | 记忆：无（/sms 开启）")
     print("/help 查看命令，/overplus 查看余量，q 退出\n")
 
     while True:
@@ -463,16 +518,16 @@ def main():
             break
 
         if user_input.startswith("/"):
-            if handle_command(user_input, config, memory):
+            if handle_command(user_input, config, ms_mgr):
                 continue
 
-        # 非命令：先显示记忆轮廓
-        _show_adumbration(memory, config)
-
+        active = ms_mgr.get_active()
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        mem_ctx = memory.get_context()
-        if mem_ctx:
-            messages.append({"role": "system", "content": f"[对话记忆]\n{mem_ctx}"})
+        if active:
+            _show_adumbration(active, ms_mgr)
+            mem_ctx = active.get_context()
+            if mem_ctx:
+                messages.append({"role": "system", "content": f"[对话记忆]\n{mem_ctx}"})
         messages.append({"role": "user", "content": user_input})
 
         _w("[推理中...]\n")
@@ -484,10 +539,14 @@ def main():
             continue
 
         if answer:
-            memory.add_turn(user_input, answer)
-            memory.compress()
+            if active:
+                active.add_turn(user_input, answer)
+                ms_mgr.sync_meta_after_turn(ms_mgr.active_id)
+                active.compress()
         else:
             print("\n[警告] 模型没有返回回答。\n")
+
+
 
 
 if __name__ == "__main__":
