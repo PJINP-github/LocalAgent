@@ -1,0 +1,26 @@
+{
+    "model":  "qwen3-1.7b",
+    "ollama_dir":  "C:\\software\\LocalAgent\\sources\\ollama-windows-amd64",
+    "memory_path":  "C:\\software\\LocalAgent\\config\\memory.json",
+    "temperature":  0.6,
+    "num_ctx":  16384,
+    "repeat_penalty":  1.05,
+    "num_predict":  2048,
+    "think":  false,
+    "max_tool_rounds":  6,
+    "enabled_tools":  [
+                          "list_directory",
+                          "read_file",
+                          "write_file",
+                          "search_files",
+                          "get_system_info",
+                          "list_processes",
+                          "run_command",
+                          "fetch_url",
+                          "open_url",
+                          "bing_search"
+                      ],
+    "available_models":  [
+                             "qwen3-1.7b"
+                         ]
+}

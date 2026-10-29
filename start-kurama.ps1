@@ -1,7 +1,5 @@
-# =====================================================
-#  Kurama Launcher - Ç¿»¯½ø³ÌÇåÀí°æ
-#  Target: Ollama 0.40.x (º¬ 0.40.5) + Intel Arc 130T
-#  ºËĞÄ¸Ä¶¯£º³¹µ×ÇåÀí ollama / llama-server / ollama-runner
+ï»¿# =====================================================
+#  Kurama Launcher (v3 - env dump + preflight)
 # =====================================================
 
 $ErrorActionPreference = "Continue"
@@ -14,19 +12,287 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 $env:PYTHONUNBUFFERED = "1"
 $env:PYTHONIOENCODING = "utf-8"
 
-# ===== Í³Ò»Ä£ĞÍÄ¿Â¼ =====
-$env:OLLAMA_MODELS = "D:\APP\Ollama\Models"
-[Environment]::SetEnvironmentVariable("OLLAMA_MODELS", "D:\APP\Ollama\Models", "User")
+Set-Location $PSScriptRoot
 
+# ---- é»˜è®¤æ¨¡å‹å­˜å‚¨ç›®å½•ï¼ˆä¸å†å›é€€åˆ° %USERPROFILE%\.ollama\modelsï¼‰----
+$DEFAULT_MODELS_PATH = "C:\software\LocalAgent\sources\models"
+
+# ===== æ—¥å¿—å‡½æ•° =====
 function Write-Step($msg) { Write-Host "[*] $msg" -ForegroundColor Cyan }
 function Write-OK($msg)   { Write-Host "[OK] $msg" -ForegroundColor Green }
 function Write-Warn($msg) { Write-Host "[!] $msg" -ForegroundColor Yellow }
 function Write-Err($msg)  { Write-Host "[X] $msg" -ForegroundColor Red }
-
+function Write-Info($msg) { Write-Host "    $msg" -ForegroundColor DarkGray }
 
 # ============================================================
-#  Ç¿»¯ÇåÀíº¯Êı£º³¹µ×É±µôËùÓĞ Ollama / Llama Ïà¹Ø½ø³Ì
-#  ·µ»Ø£º$true ±íÊ¾ÇåÀí¸É¾»£¨ÏÔ´æÒÑÊÍ·Å£©£¬$false ±íÊ¾ÈÔÓĞ²ĞÁô
+#  ä» config/config.json è¯»å– ollama_dir
+#  æ¯æ¬¡æŸ¥è¯¢éƒ½å®æ—¶è¯»ï¼Œé¿å…ç¼“å­˜æ—§å€¼
+# ============================================================
+function Get-OllamaDirFromConfig {
+    $cfgPath = Join-Path $PSScriptRoot "config\config.json"
+    if (-not (Test-Path $cfgPath)) { return $null }
+    try {
+        $raw = Get-Content $cfgPath -Raw -Encoding UTF8
+        $raw = $raw.TrimStart([char]0xFEFF)
+        $json = $raw | ConvertFrom-Json
+        if ($json.ollama_dir -and $json.ollama_dir.Trim() -ne "") {
+            return $json.ollama_dir.Trim()
+        }
+    } catch {
+        Write-Info "è¯»å– config.json çš„ ollama_dir å¤±è´¥ï¼š$($_.Exception.Message)"
+    }
+    return $null
+}
+
+# ============================================================
+#  æŸ¥æ‰¾ ollama.exe
+#  1. config.json çš„ ollama_dirï¼ˆç”¨æˆ·å¯æ”¹ï¼‰
+#  2. PATH
+#  3. æ—§é»˜è®¤å®‰è£…è·¯å¾„
+# ============================================================
+function Find-OllamaExe {
+    # 1. config.json
+    $dir = Get-OllamaDirFromConfig
+    if ($dir) {
+        if ($dir -match '\.exe\s*$') {
+            if (Test-Path $dir) { return $dir }
+            Write-Info "config.json çš„ ollama_dir æŒ‡å‘ exe ä½†ä¸å­˜åœ¨ï¼š$dir"
+        } else {
+            $exe = Join-Path $dir "ollama.exe"
+            if (Test-Path $exe) { return $exe }
+            Write-Info "config.json çš„ ollama_dir ä¸­æ‰¾ä¸åˆ° ollama.exeï¼š$exe"
+        }
+    }
+    # 2. PATH
+    $found = (Get-Command ollama.exe -ErrorAction SilentlyContinue).Source
+    if ($found) { return $found }
+    # 3. æ—§é»˜è®¤
+    $oldDefault = Join-Path $env:LOCALAPPDATA "Programs\Ollama\ollama.exe"
+    if (Test-Path $oldDefault) { return $oldDefault }
+    return $null
+}
+
+# ============================================================
+#  ç¯å¢ƒå˜é‡ dump
+# ============================================================
+function Show-Environment {
+    Write-Host ""
+    Write-Host "===== ç¯å¢ƒå˜é‡ =====" -ForegroundColor Cyan
+
+    Write-Host "  -- Ollama --" -ForegroundColor Yellow
+    $ollamaVars = @(
+        "OLLAMA_HOST", "OLLAMA_MODELS", "OLLAMA_VULKAN", "OLLAMA_IGPU_ENABLE",
+        "OLLAMA_INTEL_GPU", "OLLAMA_FLASH_ATTENTION", "OLLAMA_KV_CACHE_TYPE",
+        "OLLAMA_KEEP_ALIVE", "OLLAMA_CONTEXT_LENGTH", "OLLAMA_NUM_PARALLEL",
+        "OLLAMA_MAX_LOADED_MODELS", "OLLAMA_LOAD_TIMEOUT", "OLLAMA_GPU_OVERHEAD",
+        "OLLAMA_DEBUG", "OLLAMA_ORIGINS", "OLLAMA_NOPRUNE", "OLLAMA_NO_CLOUD"
+    )
+    foreach ($n in $ollamaVars) {
+        $v = [Environment]::GetEnvironmentVariable($n)
+        if ($null -ne $v -and $v -ne "") {
+            Write-Host ("    {0,-28} = {1}" -f $n, $v)
+        } else {
+            Write-Host ("    {0,-28} = <unset>" -f $n) -ForegroundColor DarkGray
+        }
+    }
+
+    Write-Host "  -- GPU / åŠ é€Ÿ --" -ForegroundColor Yellow
+    $gpuVars = @(
+        "CUDA_VISIBLE_DEVICES", "HIP_VISIBLE_DEVICES",
+        "GGML_VK_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES",
+        "ONEAPI_DEVICE_SELECTOR"
+    )
+    $anyGpu = $false
+    foreach ($n in $gpuVars) {
+        $v = [Environment]::GetEnvironmentVariable($n)
+        if ($null -ne $v -and $v -ne "") {
+            Write-Host ("    {0,-28} = {1}" -f $n, $v)
+            $anyGpu = $true
+        }
+    }
+    if (-not $anyGpu) { Write-Host "    (æ—  GPU ç›¸å…³å˜é‡)" -ForegroundColor DarkGray }
+
+    Write-Host "  -- Python --" -ForegroundColor Yellow
+    foreach ($n in @("PYTHONUNBUFFERED", "PYTHONIOENCODING", "PYTHONPATH", "VIRTUAL_ENV")) {
+        $v = [Environment]::GetEnvironmentVariable($n)
+        $disp = if ($null -ne $v -and $v -ne "") { $v } else { "<unset>" }
+        Write-Host ("    {0,-28} = {1}" -f $n, $disp)
+    }
+
+    Write-Host "  -- ç½‘ç»œä»£ç† --" -ForegroundColor Yellow
+    $anyProxy = $false
+    foreach ($n in @("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy")) {
+        $v = [Environment]::GetEnvironmentVariable($n)
+        if ($null -ne $v -and $v -ne "") {
+            Write-Host ("    {0,-28} = {1}" -f $n, $v)
+            $anyProxy = $true
+        }
+    }
+    if (-not $anyProxy) { Write-Host "    (æ— ä»£ç†å˜é‡)" -ForegroundColor DarkGray }
+
+    Write-Host "  -- ç³»ç»Ÿè·¯å¾„ --" -ForegroundColor Yellow
+    foreach ($n in @("USERPROFILE", "LOCALAPPDATA", "APPDATA", "TEMP", "TMP")) {
+        $v = [Environment]::GetEnvironmentVariable($n)
+        Write-Host ("    {0,-28} = {1}" -f $n, $v)
+    }
+
+    Write-Host "  -- PATH ä¸­ç›¸å…³é¡¹ --" -ForegroundColor Yellow
+    $paths = $env:PATH -split ';' | Where-Object {
+        $_ -and ($_ -match 'ollama|python|venv|LocalAgent|software')
+    }
+    if ($paths) {
+        foreach ($p in $paths) { Write-Host "    $p" -ForegroundColor DarkGray }
+    } else {
+        Write-Host "    (PATH ä¸­æ—  ollama/python/venv ç›¸å…³é¡¹)" -ForegroundColor DarkGray
+    }
+
+    Write-Host "  -- Ollama è·¯å¾„ --" -ForegroundColor Yellow
+    $cfgDir = Get-OllamaDirFromConfig
+    if ($cfgDir) {
+        Write-Host ("    config.json ollama_dir = {0}" -f $cfgDir)
+    } else {
+        Write-Host "    config.json æœªè®¾ç½® ollama_dirï¼ˆæˆ–è¯»å–å¤±è´¥ï¼‰" -ForegroundColor DarkGray
+    }
+    $resolved = Find-OllamaExe
+    if ($resolved) {
+        Write-Host ("    å®é™…ä½¿ç”¨ ollama.exe   = {0}" -f $resolved) -ForegroundColor Green
+    } else {
+        Write-Host "    å®é™…ä½¿ç”¨ ollama.exe   = <æœªæ‰¾åˆ°>" -ForegroundColor Red
+    }
+
+    Write-Host "  -- æ¨¡å‹ç›®å½• --" -ForegroundColor Yellow
+    $effectiveModels = $env:OLLAMA_MODELS
+    if (-not $effectiveModels) { $effectiveModels = $DEFAULT_MODELS_PATH }
+    Write-Host ("    OLLAMA_MODELS = {0}" -f $effectiveModels)
+
+    Write-Host ""
+}
+
+# ============================================================
+#  é¢„æ£€æŸ¥
+# ============================================================
+function Test-Prereqs {
+    $ok = $true
+
+    Write-Host ""
+    Write-Host "===== é¢„æ£€æŸ¥ =====" -ForegroundColor Cyan
+
+    # 1. ç³»ç»Ÿä¿¡æ¯
+    Write-Host "  -- ç³»ç»Ÿ --" -ForegroundColor Yellow
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+        if ($os) {
+            $totalGB = [math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
+            $freeGB  = [math]::Round($os.FreePhysicalMemory / 1MB, 1)
+            Write-Host ("    OS           : {0} {1}" -f $os.Caption, $os.Version)
+            Write-Host ("    å†…å­˜         : æ€» {0} GB / å¯ç”¨ {1} GB" -f $totalGB, $freeGB)
+            if ($freeGB -lt 4) { Write-Warn "å¯ç”¨å†…å­˜ < 4 GBï¼Œå¯èƒ½å½±å“æ¨¡å‹åŠ è½½" }
+        }
+    } catch { Write-Warn "è¯»å–ç³»ç»Ÿä¿¡æ¯å¤±è´¥" }
+
+    # 2. ç£ç›˜
+    Write-Host "  -- ç£ç›˜ --" -ForegroundColor Yellow
+    try {
+        $driveName = (Get-Item $PSScriptRoot).PSDrive.Name
+        $d = Get-PSDrive -Name $driveName -ErrorAction SilentlyContinue
+        if ($d) {
+            $freeDiskGB = [math]::Round($d.Free / 1GB, 1)
+            Write-Host ("    {0}: å‰©ä½™ {1} GB" -f $driveName, $freeDiskGB)
+            if ($freeDiskGB -lt 5) { Write-Warn "é¡¹ç›®ç›˜å‰©ä½™ < 5 GB" }
+        }
+    } catch { Write-Warn "è¯»å–ç£ç›˜ä¿¡æ¯å¤±è´¥" }
+
+    # 3. Python / venv / ä¾èµ–
+    Write-Host "  -- Python / venv --" -ForegroundColor Yellow
+    $venvPy = Join-Path $PSScriptRoot "venv\Scripts\python.exe"
+    if (Test-Path $venvPy) {
+        try {
+            $pv = (& $venvPy --version 2>&1 | Out-String).Trim()
+            Write-OK "venv Python: $pv"
+            $deps = @("langchain_ollama", "requests", "bs4", "psutil")
+            $missing = @()
+            foreach ($dep in $deps) {
+                $null = & $venvPy -c "import $dep" 2>&1
+                if ($LASTEXITCODE -ne 0) { $missing += $dep }
+            }
+            if ($missing.Count -eq 0) {
+                Write-Info "ä¾èµ– OK: $($deps -join ', ')"
+            } else {
+                Write-Warn "ä¾èµ–ç¼ºå¤±: $($missing -join ', ')"
+                Write-Info "ä¿®å¤: .\venv\Scripts\python.exe -m pip install $($missing -join ' ')"
+                $ok = $false
+            }
+        } catch {
+            Write-Err "venv python è°ƒç”¨å¤±è´¥: $_"
+            $ok = $false
+        }
+    } else {
+        Write-Err "venv Python ä¸å­˜åœ¨ï¼š$venvPy"
+        Write-Info "å…ˆåˆ›å»º: python -m venv venv"
+        $ok = $false
+    }
+
+    # 4. Ollama
+    Write-Host "  -- Ollama --" -ForegroundColor Yellow
+    $ollamaExe = Find-OllamaExe
+    if ($ollamaExe) {
+        try {
+            $ov = (& $ollamaExe --version 2>&1 | Out-String).Trim()
+            $ov = ($ov -split "`n" | Where-Object { $_ -notmatch 'could not connect' }) -join "`n"
+            Write-OK "ollama: $($ov.Trim())"
+            Write-Info "è·¯å¾„: $ollamaExe"
+        } catch {
+            Write-Warn "ollama --version è°ƒç”¨å¤±è´¥"
+        }
+    } else {
+        Write-Err "æ‰¾ä¸åˆ° ollama.exe"
+        $cfgDir = Get-OllamaDirFromConfig
+        if ($cfgDir) {
+            Write-Info "config.json é‡Œçš„ ollama_dir = $cfgDirï¼Œä½†è¯¥ç›®å½•ä¸‹æ‰¾ä¸åˆ° ollama.exe"
+        } else {
+            Write-Info "config.json é‡Œæœªè®¾ç½® ollama_dir"
+        }
+        Write-Info "è¯·åœ¨ config\config.json ä¸­è®¾ç½®ï¼š""ollama_dir"": ""C:\\software\\ollama-windows-amd64"""
+        $ok = $false
+    }
+
+    # 5. é…ç½®æ–‡ä»¶
+    Write-Host "  -- é…ç½® --" -ForegroundColor Yellow
+    $cfgPath = Join-Path $PSScriptRoot "config\config.json"
+    if (Test-Path $cfgPath) {
+        Write-OK "config: $cfgPath"
+        try {
+            $null = Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            Write-Info "JSON åˆæ³•"
+        } catch {
+            Write-Warn "JSON è§£æå¤±è´¥: $($_.Exception.Message)"
+            $ok = $false
+        }
+    } else {
+        Write-Warn "config.json ä¸å­˜åœ¨: $cfgPath"
+        Write-Info "é¦–æ¬¡è¿è¡Œä¼šå¯åŠ¨äº¤äº’å‘å¯¼"
+    }
+
+    # 6. ç«¯å£ 11434
+    Write-Host "  -- ç«¯å£ 11434 --" -ForegroundColor Yellow
+    try {
+        $conn = Get-NetTCPConnection -LocalPort 11434 -State Listen -ErrorAction SilentlyContinue
+        if ($conn) {
+            $pids = ($conn | Select-Object -ExpandProperty OwningProcess -Unique) -join ","
+            Write-Warn "å·²è¢«å ç”¨ (PID $pids)ï¼Œç¨åä¼šå¼ºæ€"
+        } else {
+            Write-OK "ç©ºé—²"
+        }
+    } catch {
+        Write-Warn "æ— æ³•æ£€æŸ¥ç«¯å£ï¼ˆå¯èƒ½æƒé™ä¸è¶³ï¼‰"
+    }
+
+    Write-Host ""
+    return $ok
+}
+
+# ============================================================
+#  æ¸…ç†è¿›ç¨‹
 # ============================================================
 function Clear-OllamaProcesses {
     param(
@@ -34,42 +300,29 @@ function Clear-OllamaProcesses {
         [double]$SharedMemWarnGB = 3.0
     )
 
-    Write-Step "ÇåÀí Ollama / Llama Ïà¹Ø½ø³Ì..."
+    Write-Step "æ¸…ç† Ollama / Llama ç›¸å…³è¿›ç¨‹..."
 
-    # ---- 1. ÏÈÉ± GUI ÍĞÅÌ£¬·ÀÖ¹Ëü×Ô¶¯ÖØÆô serve ----
-    $guiNames = @("ollama app")
-    foreach ($n in $guiNames) {
+    # zip è§£å‹ç‰ˆæ²¡æœ‰ GUI è¿›ç¨‹ï¼Œè¿™é‡Œä¼šé™é»˜å¤±è´¥ï¼Œæ— æ‰€è°“
+    foreach ($n in @("ollama app")) {
         try {
             $procs = Get-Process -Name $n -ErrorAction SilentlyContinue
             foreach ($p in $procs) {
-                Write-Host "  É± GUI: $($p.Name) (PID $($p.Id))" -ForegroundColor DarkGray
+                Write-Info "æ€ GUI: $($p.Name) (PID $($p.Id))"
                 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
             }
         } catch {}
     }
     Start-Sleep -Milliseconds 500
 
-    # ---- 2. ÓÃ taskkill /T É±½ø³ÌÊ÷£¨¸²¸Ç×Ó½ø³Ì£©----
-    $killNames = @(
-        "ollama.exe",
-        "ollama app.exe",
-        "llama-server.exe",
-        "llama_server.exe",
+    foreach ($name in @(
+        "ollama.exe", "ollama app.exe",
+        "llama-server.exe", "llama_server.exe",
         "ollama_llama_server.exe",
-        "ollama-runner.exe",
-        "ollama_runner.exe"
-    )
-    foreach ($name in $killNames) {
-        try {
-            $out = & taskkill /F /T /IM $name 2>&1
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "  taskkill: $name" -ForegroundColor DarkGray
-            }
-        } catch {}
+        "ollama-runner.exe", "ollama_runner.exe"
+    )) {
+        try { $null = & taskkill /F /T /IM $name 2>&1 } catch {}
     }
 
-    # ---- 3. WMI ¶µµ×£ºÉ¨ËùÓĞÃû×Ö/ÃüÁîĞĞº¬ ollama »ò llama-server µÄ½ø³Ì ----
-    #   ÕâÒ»²½ÄÜ×¥µ½ Get-Process -Name ÒòÃû×ÖÌØÊâ/¿Õ¸ñ/±äÌå¶øÂ©µôµÄ½ø³Ì
     try {
         $wmiProcs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
             Where-Object {
@@ -78,39 +331,35 @@ function Clear-OllamaProcesses {
             }
         foreach ($p in $wmiProcs) {
             if ($p.ProcessId -and $p.ProcessId -ne $PID) {
-                Write-Host "  WMI ¶µµ×É±: $($p.Name) (PID $($p.ProcessId))" -ForegroundColor DarkGray
+                Write-Info "WMI å…œåº•æ€: $($p.Name) (PID $($p.ProcessId))"
                 Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
             }
         }
     } catch {}
 
-    # ---- 4. ¼ì²é 11434 ¶Ë¿ÚÕ¼ÓÃ£¬ÓĞ½©Ê¬Õ¼ÓÃ¾ÍÉ± ----
     try {
         $conns = Get-NetTCPConnection -LocalPort 11434 -State Listen -ErrorAction SilentlyContinue
         if ($conns) {
             foreach ($c in $conns) {
-                $ownerPid = $c.OwningProcess
-                if ($ownerPid -and $ownerPid -ne $PID) {
-                    $ownerName = (Get-Process -Id $ownerPid -ErrorAction SilentlyContinue).Name
-                    Write-Host "  ¶Ë¿Ú 11434 ±»Õ¼ÓÃ£º$ownerName (PID $ownerPid)£¬Ç¿É±" -ForegroundColor DarkGray
-                    & taskkill /F /T /PID $ownerPid 2>&1 | Out-Null
+                $op = $c.OwningProcess
+                if ($op -and $op -ne $PID) {
+                    $on = (Get-Process -Id $op -ErrorAction SilentlyContinue).Name
+                    Write-Info "ç«¯å£ 11434 è¢«å ç”¨ï¼š$on (PID $op)ï¼Œå¼ºæ€"
+                    $null = & taskkill /F /T /PID $op 2>&1
                 }
             }
         }
     } catch {}
 
-    # ---- 5. ÂÖÑ¯µÈ´ıËùÓĞÏà¹Ø½ø³ÌÕæÕıÍË³ö ----
-    Write-Step "µÈ´ı½ø³ÌÍêÈ«ÍË³ö£¨×î¶à $MaxWaitSeconds Ãë£©..."
+    Write-Step "ç­‰å¾…è¿›ç¨‹å®Œå…¨é€€å‡ºï¼ˆæœ€å¤š $MaxWaitSeconds ç§’ï¼‰..."
     $waited = 0
     $lastCount = -1
     while ($waited -lt $MaxWaitSeconds) {
         $remain = Get-Process -Name "ollama*", "llama*" -ErrorAction SilentlyContinue
         $count = if ($remain) { @($remain).Count } else { 0 }
         if ($count -eq 0) { break }
-
-        # Ã¿ 2 ÃëÔÙ²¹É±Ò»´Î£¨Ó¦¶Ô±»ÖØÆôµÄ½ø³Ì£©
         if ($count -ne $lastCount -and $waited -gt 0) {
-            Write-Host "  ÈÔÓĞ $count ¸ö½ø³Ì£¬²¹É±Ò»ÂÖ..." -ForegroundColor DarkGray
+            Write-Info "ä»æœ‰ $count ä¸ªè¿›ç¨‹ï¼Œè¡¥æ€ä¸€è½®..."
             foreach ($p in $remain) {
                 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
             }
@@ -119,9 +368,8 @@ function Clear-OllamaProcesses {
         Start-Sleep -Seconds 2
         $waited += 2
     }
-    Write-Host "  ÒÑµÈ´ı $waited Ãë" -ForegroundColor DarkGray
+    Write-Info "å·²ç­‰å¾… $waited ç§’"
 
-    # ---- 6. Ğ£Ñé¹²ÏíÏÔ´æ ----
     $sharedGB = -1
     try {
         $samples = (Get-Counter "\GPU Adapter Memory(*)\Shared Usage" -ErrorAction SilentlyContinue).CounterSamples
@@ -133,35 +381,50 @@ function Clear-OllamaProcesses {
 
     if ($sharedGB -ge 0) {
         if ($sharedGB -gt $SharedMemWarnGB) {
-            Write-Warn "¹²ÏíÏÔ´æÈÔÕ¼ÓÃ ${sharedGB} GB£¨ãĞÖµ $SharedMemWarnGB GB£©"
-            Write-Warn "  ¿ÉÄÜÓĞÆäËû³ÌĞòÔÚÓÃÏÔ´æ£¨ä¯ÀÀÆ÷Ó²¼ş¼ÓËÙ / ÒôÀÖ²¥·ÅÆ÷ / ÉÏÒ»ÂÖ²ĞÁô£©"
-            Write-Warn "  ½¨Òé£º¹Ø±Õä¯ÀÀÆ÷ºóÖØÊÔ£»»ò½µµÍ num_ctx / »» q4_0 KV Cache"
+            Write-Warn "å…±äº«æ˜¾å­˜ä»å ç”¨ $sharedGB GBï¼ˆé˜ˆå€¼ $SharedMemWarnGB GBï¼‰"
+            Write-Warn "  å»ºè®®ï¼šå…³é—­æµè§ˆå™¨ç¡¬ä»¶åŠ é€Ÿåé‡è¯•ï¼›æˆ–é™ä½ num_ctx / æ¢ q4_0 KV Cache"
             return $false
         } else {
-            Write-OK "¹²ÏíÏÔ´æÒÑÊÍ·Å£º${sharedGB} GB"
+            Write-OK "å…±äº«æ˜¾å­˜å·²é‡Šæ”¾ï¼š$sharedGB GB"
         }
     } else {
-        Write-Warn "ÎŞ·¨¶ÁÈ¡¹²ÏíÏÔ´æ¼ÆÊıÆ÷£¬Ìø¹ıĞ£Ñé"
+        Write-Warn "æ— æ³•è¯»å–å…±äº«æ˜¾å­˜è®¡æ•°å™¨ï¼Œè·³è¿‡æ ¡éªŒ"
     }
 
-    # ---- 7. ×îÖÕÈ·ÈÏÃ»ÓĞ²ĞÁô ----
     $final = Get-Process -Name "ollama*", "llama*" -ErrorAction SilentlyContinue
     if ($final) {
-        Write-Warn "ÈÔÓĞ½ø³Ì²ĞÁô£º$($final.Name -join ', ')"
+        Write-Warn "ä»æœ‰è¿›ç¨‹æ®‹ç•™ï¼š$($final.Name -join ', ')"
         return $false
     }
-
     return $true
 }
 
 
-# ===== 1. ¶ÁÈ¡ÅäÖÃ =====
-$configPath = Join-Path $PSScriptRoot ".local-agent\config.json"
+# ============================================================
+#  [0/5] ç¯å¢ƒ dump + é¢„æ£€æŸ¥
+# ============================================================
+Write-Step "[0/5] ç¯å¢ƒå˜é‡ä¸é¢„æ£€æŸ¥"
+Show-Environment
+$prereqOK = Test-Prereqs
+if (-not $prereqOK) {
+    Write-Err "é¢„æ£€æŸ¥å‘ç°é—®é¢˜ï¼ˆè§ä¸Šé¢ [X]/[!] è¡Œï¼‰"
+    $go = Read-Host "æ˜¯å¦ç»§ç»­å¯åŠ¨ï¼Ÿ(y/N)"
+    if ($go -ne "y" -and $go -ne "Y") {
+        Write-Host "å·²å–æ¶ˆã€‚" -ForegroundColor Yellow
+        Read-Host "æŒ‰å›è½¦é€€å‡º"
+        exit 1
+    }
+}
+
+# ============================================================
+#  è¯»é…ç½®
+# ============================================================
+$configPath = Join-Path $PSScriptRoot "config\config.json"
 
 if (-not (Test-Path $configPath)) {
-    Write-Err "Î´ÕÒµ½ÅäÖÃÎÄ¼ş£º$configPath"
-    Write-Step "½«Ê¹ÓÃÄ¬ÈÏÅäÖÃ¼ÌĞø£¨Ê×´ÎÔËĞĞ»áÆô¶¯ agent.py ½»»¥Ïòµ¼£©"
-    $cfg = [PSCustomObject]@{ model = ""; available_models = @() }
+    Write-Err "æœªæ‰¾åˆ°é…ç½®æ–‡ä»¶ï¼š$configPath"
+    Write-Step "å°†ä½¿ç”¨é»˜è®¤é…ç½®ç»§ç»­ï¼ˆé¦–æ¬¡è¿è¡Œä¼šå¯åŠ¨ agent äº¤äº’å‘å¯¼ï¼‰"
+    $cfg = [PSCustomObject]@{ model = ""; available_models = @(); ollama_dir = "" }
 } else {
     $cfg = $null
     try {
@@ -169,8 +432,8 @@ if (-not (Test-Path $configPath)) {
         $raw = $raw.TrimStart([char]0xFEFF)
         $cfg = $raw | ConvertFrom-Json
     } catch {
-        Write-Err "ÅäÖÃÎÄ¼ş½âÎöÊ§°Ü£º$($_.Exception.Message)"
-        Read-Host "°´»Ø³µÍË³ö"
+        Write-Err "é…ç½®æ–‡ä»¶è§£æå¤±è´¥ï¼š$($_.Exception.Message)"
+        Read-Host "æŒ‰å›è½¦é€€å‡º"
         exit 1
     }
 }
@@ -178,22 +441,79 @@ if (-not (Test-Path $configPath)) {
 $available = @($cfg.available_models)
 $lastModel = $cfg.model
 
-# ===== 2. ½»»¥Ê½Ñ¡ÔñÄ£ĞÍ =====
+# ============================================================
+#  æ¨¡å‹å­˜å‚¨è·¯å¾„ï¼ˆè‡ªæ„ˆ OLLAMA_MODELSï¼‰
+#  ä¼˜å…ˆçº§ï¼šollama.yaml çš„ models_path â†’ å†…ç½®é»˜è®¤
+#  ä¸å†ä½¿ç”¨ %USERPROFILE%\.ollama\models
+# ============================================================
+$ollamaYaml = Join-Path $PSScriptRoot "config\ollama.yaml"
+$modelsPath = ""
+
+if (Test-Path $ollamaYaml) {
+    try {
+        $yamlText = Get-Content $ollamaYaml -Raw -Encoding UTF8
+        if ($yamlText -match 'models_path\s*:\s*["'']?([^"''\r\n#]+)["'']?') {
+            $modelsPath = $Matches[1].Trim()
+        }
+    } catch {}
+}
+
+# æ¸…ç†æŒ‡å‘å·²ä¸å­˜åœ¨ç›®å½•çš„æŒä¹…åŒ– OLLAMA_MODELSï¼ˆé¿å…æ—§ç”¨æˆ·ç›®å½•å¹²æ‰°ï¼‰
+$persisted = [Environment]::GetEnvironmentVariable("OLLAMA_MODELS", "User")
+if ($persisted -and -not (Test-Path $persisted)) {
+    Write-Warn "æ¸…ç†æ— æ•ˆçš„æŒä¹…åŒ– OLLAMA_MODELSï¼š$persisted"
+    [Environment]::SetEnvironmentVariable("OLLAMA_MODELS", $null, "User")
+    try { [Environment]::SetEnvironmentVariable("OLLAMA_MODELS", $null, "Machine") } catch {}
+    Remove-Item -Path "Env:OLLAMA_MODELS" -ErrorAction SilentlyContinue
+}
+
+# å†³å®šæœ€ç»ˆä½¿ç”¨çš„æ¨¡å‹ç›®å½•
+if (-not $modelsPath) {
+    $modelsPath = $DEFAULT_MODELS_PATH
+    Write-Info "config\ollama.yaml æœªæŒ‡å®š models_pathï¼Œä½¿ç”¨å†…ç½®é»˜è®¤ï¼š$DEFAULT_MODELS_PATH"
+} elseif ($modelsPath -ne $DEFAULT_MODELS_PATH -and -not (Test-Path $modelsPath)) {
+    Write-Warn "config\ollama.yaml é‡Œçš„ models_path ä¸å­˜åœ¨ï¼š$modelsPath"
+    Write-Info "å›é€€åˆ°å†…ç½®é»˜è®¤ï¼š$DEFAULT_MODELS_PATH"
+    $modelsPath = $DEFAULT_MODELS_PATH
+}
+
+# ç¡®ä¿ç›®å½•å­˜åœ¨
+if (-not (Test-Path $modelsPath)) {
+    try {
+        New-Item -ItemType Directory -Path $modelsPath -Force | Out-Null
+        Write-Info "å·²åˆ›å»ºæ¨¡å‹ç›®å½•ï¼š$modelsPath"
+    } catch {
+        Write-Warn "åˆ›å»ºæ¨¡å‹ç›®å½•å¤±è´¥ï¼š$modelsPathï¼ˆ$($_.Exception.Message)ï¼‰"
+    }
+}
+
+if (Test-Path $modelsPath) {
+    $env:OLLAMA_MODELS = $modelsPath
+    Write-OK "OLLAMA_MODELS = $modelsPath"
+} else {
+    Write-Err "æ¨¡å‹ç›®å½•ä¸å¯ç”¨ï¼š$modelsPath"
+    Write-Info "è¯·æ£€æŸ¥ config\ollama.yaml çš„ models_pathï¼Œæˆ–æ‰‹åŠ¨åˆ›å»ºè¯¥ç›®å½•"
+    Read-Host "æŒ‰å›è½¦ç»§ç»­ï¼ˆå¯èƒ½æ— æ³•åŠ è½½æ¨¡å‹ï¼‰"
+}
+
+# ============================================================
+#  äº¤äº’å¼é€‰æ‹©æ¨¡å‹
+# ============================================================
 if ($available.Count -gt 0) {
     Write-Host ""
     Write-Host "===============================" -ForegroundColor Cyan
-    Write-Host "  ÇëÑ¡ÔñÒªÊ¹ÓÃµÄÄ£ĞÍ" -ForegroundColor Cyan
+    Write-Host "  è¯·é€‰æ‹©è¦ä½¿ç”¨çš„æ¨¡å‹" -ForegroundColor Cyan
     Write-Host "===============================" -ForegroundColor Cyan
     Write-Host ""
 
     for ($i = 0; $i -lt $available.Count; $i++) {
         $mark = ""
-        if ($available[$i] -eq $lastModel) { $mark = "  (ÉÏ´ÎÊ¹ÓÃ)" }
+        if ($available[$i] -eq $lastModel) { $mark = "  (ä¸Šæ¬¡ä½¿ç”¨)" }
         Write-Host ("  [{0}] {1}{2}" -f ($i + 1), $available[$i], $mark)
     }
 
     Write-Host ""
-    $choice = Read-Host "ÊäÈë±àºÅºó»Ø³µ£¨Ö±½Ó»Ø³µÊ¹ÓÃÉÏ´Î£º$lastModel£©"
+    $choice = Read-Host "è¾“å…¥ç¼–å·åå›è½¦ï¼ˆç›´æ¥å›è½¦ä½¿ç”¨ä¸Šæ¬¡ï¼š$lastModelï¼‰"
 
     $model = $lastModel
     if ($choice -match '^\d+$') {
@@ -201,60 +521,55 @@ if ($available.Count -gt 0) {
         if ($idx -ge 0 -and $idx -lt $available.Count) {
             $model = $available[$idx]
         } else {
-            Write-Warn "±àºÅ³¬³ö·¶Î§£¬Ê¹ÓÃÉÏ´ÎÑ¡Ôñ"
+            Write-Warn "ç¼–å·è¶…å‡ºèŒƒå›´ï¼Œä½¿ç”¨ä¸Šæ¬¡é€‰æ‹©"
         }
     }
     Write-Host ""
-    Write-Host "[ÒÑÑ¡Ôñ] $model" -ForegroundColor Green
+    Write-Host "[å·²é€‰æ‹©] $model" -ForegroundColor Green
     Write-Host ""
 
-    # ±£´æÑ¡Ôñ
     try {
         $cfg.model = $model
         $newJson = $cfg | ConvertTo-Json -Depth 10
         [System.IO.File]::WriteAllText($configPath, $newJson, [System.Text.UTF8Encoding]::new($false))
-        Write-Step "ÒÑ±£´æÑ¡Ôñµ½ config.json"
+        Write-Step "å·²ä¿å­˜é€‰æ‹©åˆ° config.json"
     } catch {
-        Write-Warn "±£´æÅäÖÃÊ§°Ü£º$($_.Exception.Message)"
+        Write-Warn "ä¿å­˜é…ç½®å¤±è´¥ï¼š$($_.Exception.Message)"
     }
 } else {
-    Write-Warn "config.json Î´ÅäÖÃ available_models£¬Ìø¹ıÄ£ĞÍÑ¡Ôñ"
+    Write-Warn "config.json æœªé…ç½® available_modelsï¼Œè·³è¿‡æ¨¡å‹é€‰æ‹©"
     $model = $lastModel
     if (-not $model) {
-        Write-Err "Ã»ÓĞ¿ÉÓÃÄ£ĞÍ£¬ÇëÏÈÔÚ config.json ÖĞÅäÖÃ available_models ºÍ model"
-        Read-Host "°´»Ø³µÍË³ö"
+        Write-Err "æ²¡æœ‰å¯ç”¨æ¨¡å‹ï¼Œè¯·å…ˆåœ¨ config.json ä¸­é…ç½® available_models å’Œ model"
+        Read-Host "æŒ‰å›è½¦é€€å‡º"
         exit 1
     }
-    Write-Host "[Ê¹ÓÃ] $model" -ForegroundColor Green
+    Write-Host "[ä½¿ç”¨] $model" -ForegroundColor Green
 }
 
-# ===== 3. ÇåÀí¾É½ø³Ì£¨ºËĞÄ¸Ä½ø£©=====
-Write-Step "[1/4] Í£Ö¹ËùÓĞ Ollama / Llama ½ø³Ì..."
-
+# ============================================================
+#  [1/5] æ¸…ç†æ—§è¿›ç¨‹
+# ============================================================
+Write-Step "[1/5] åœæ­¢æ‰€æœ‰ Ollama / Llama è¿›ç¨‹..."
 $clean = Clear-OllamaProcesses -MaxWaitSeconds 60 -SharedMemWarnGB 3.0
 if (-not $clean) {
-    Write-Warn "ÇåÀíÎ´ÍêÈ«³É¹¦£¬¼ÌĞø³¢ÊÔÆô¶¯£¨¿ÉÄÜÊ§°Ü£©"
-    $go = Read-Host "ÊÇ·ñ¼ÌĞøÆô¶¯£¿(y/N)"
+    Write-Warn "æ¸…ç†æœªå®Œå…¨æˆåŠŸï¼Œç»§ç»­å°è¯•å¯åŠ¨ï¼ˆå¯èƒ½å¤±è´¥ï¼‰"
+    $go = Read-Host "æ˜¯å¦ç»§ç»­å¯åŠ¨ï¼Ÿ(y/N)"
     if ($go -ne "y" -and $go -ne "Y") {
-        Write-Host "ÒÑÈ¡Ïû¡£" -ForegroundColor Yellow
-        Read-Host "°´»Ø³µÍË³ö"
+        Write-Host "å·²å–æ¶ˆã€‚" -ForegroundColor Yellow
+        Read-Host "æŒ‰å›è½¦é€€å‡º"
         exit 1
     }
 }
 
-# ===== 4. ÉèÖÃ GPU »·¾³±äÁ¿ =====
-Write-Step "ÉèÖÃ GPU ¼ÓËÙ»·¾³±äÁ¿..."
-
-# ÇåÀí¿ÉÄÜ³åÍ»µÄ¾É±äÁ¿
-$stale = @(
-    "OLLAMA_FLASH_ATTENTION",
-    "OLLAMA_KV_CACHE_TYPE",
-    "OLLAMA_GPU_OVERHEAD",
-    "OLLAMA_NUM_PARALLEL",
-    "OLLAMA_MAX_LOADED_MODELS",
-    "HIP_VISIBLE_DEVICES"
-)
-foreach ($name in $stale) {
+# ============================================================
+#  è®¾ç½® GPU ç¯å¢ƒå˜é‡
+# ============================================================
+Write-Step "è®¾ç½® GPU åŠ é€Ÿç¯å¢ƒå˜é‡..."
+foreach ($name in @(
+    "OLLAMA_FLASH_ATTENTION", "OLLAMA_KV_CACHE_TYPE", "OLLAMA_GPU_OVERHEAD",
+    "OLLAMA_NUM_PARALLEL", "OLLAMA_MAX_LOADED_MODELS", "HIP_VISIBLE_DEVICES"
+)) {
     [Environment]::SetEnvironmentVariable($name, $null, "User")
     Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
 }
@@ -270,24 +585,36 @@ $env:OLLAMA_KEEP_ALIVE      = "5m"
 [Environment]::SetEnvironmentVariable("OLLAMA_IGPU_ENABLE", "1", "User")
 [Environment]::SetEnvironmentVariable("OLLAMA_INTEL_GPU", "true", "User")
 
-# ===== 5. Æô¶¯ Ollama =====
-Write-Step "[2/4] ºóÌ¨Æô¶¯ Ollama serve..."
+# ============================================================
+#  [2/5] å¯åŠ¨ Ollama
+# ============================================================
+Write-Step "[2/5] åå°å¯åŠ¨ Ollama serve..."
 
-$ollamaExe = Join-Path $env:LOCALAPPDATA "Programs\Ollama\ollama.exe"
-if (-not (Test-Path $ollamaExe)) {
-    # ¶µµ×£º´Ó PATH ÕÒ
-    $found = (Get-Command ollama.exe -ErrorAction SilentlyContinue).Source
-    if ($found) { $ollamaExe = $found }
-}
-if (-not (Test-Path $ollamaExe)) {
-    Write-Err "ÕÒ²»µ½ ollama.exe£¨³¢ÊÔ¹ı LOCALAPPDATA ºÍ PATH£©"
-    Read-Host "°´»Ø³µÍË³ö"
+$ollamaExe = Find-OllamaExe
+if (-not $ollamaExe) {
+    Write-Err "æ‰¾ä¸åˆ° ollama.exe"
+    $cfgDir = Get-OllamaDirFromConfig
+    if ($cfgDir) {
+        Write-Info "config.json çš„ ollama_dir = $cfgDirï¼Œä½†è¯¥ç›®å½•ä¸‹æ—  ollama.exe"
+    } else {
+        Write-Info "config.json é‡Œæœªè®¾ç½® ollama_dir"
+    }
+    Write-Info "è¯·åœ¨ config\config.json ä¸­è®¾ç½®ï¼š""ollama_dir"": ""C:\\software\\ollama-windows-amd64"""
+    Read-Host "æŒ‰å›è½¦é€€å‡º"
     exit 1
 }
+Write-Info "ä½¿ç”¨ ollama: $ollamaExe"
+Write-Info "æ¨¡å‹ç›®å½•:   $env:OLLAMA_MODELS"
 
-Start-Process -FilePath $ollamaExe -ArgumentList "serve" -WindowStyle Hidden
+$stdoutLog = Join-Path $PSScriptRoot "ollama-serve.log"
+$stderrLog = Join-Path $PSScriptRoot "ollama-serve.err.log"
+Remove-Item $stdoutLog, $stderrLog -ErrorAction SilentlyContinue
 
-# ÂÖÑ¯µÈ´ı API ¾ÍĞ÷£¨¶ø²»ÊÇËÀµÈ 6 Ãë£©
+Start-Process -FilePath $ollamaExe -ArgumentList "serve" `
+    -RedirectStandardOutput $stdoutLog `
+    -RedirectStandardError $stderrLog `
+    -WindowStyle Hidden
+
 $apiReady = $false
 for ($i = 0; $i -lt 30; $i++) {
     Start-Sleep -Seconds 1
@@ -297,15 +624,24 @@ for ($i = 0; $i -lt 30; $i++) {
     } catch {}
 }
 if (-not $apiReady) {
-    Write-Err "Ollama API 30 ÃëÄÚÎ´¾ÍĞ÷£¬¿ÉÄÜ±»¶Ë¿ÚÕ¼ÓÃ»ò½ø³Ì³åÍ»"
-    Write-Step "Çë¼ì²é£ºGet-NetTCPConnection -LocalPort 11434"
-    Read-Host "°´»Ø³µÍË³ö"
+    Write-Err "Ollama API 30 ç§’å†…æœªå°±ç»ª"
+    Write-Step "è¯·æ£€æŸ¥ï¼šGet-NetTCPConnection -LocalPort 11434"
+    Write-Step "è¯¦ç»†æ—¥å¿—ï¼š$stderrLog"
+    if (Test-Path $stderrLog) {
+        Write-Host ""
+        Write-Host "----- ollama-serve.err.log (tail 20) -----" -ForegroundColor Yellow
+        Get-Content $stderrLog -Tail 20
+        Write-Host "------------------------------------------" -ForegroundColor Yellow
+    }
+    Read-Host "æŒ‰å›è½¦é€€å‡º"
     exit 1
 }
-Write-OK "Ollama API ÒÑ¾ÍĞ÷"
+Write-OK "Ollama API å·²å°±ç»ª"
 
-# ===== 6. Ô¤ÈÈÑ¡ÖĞµÄÄ£ĞÍ =====
-Write-Step "[3/4] Ô¤ÈÈÄ£ĞÍ '$model'£¨Ê×´Î¿ÉÄÜ 30-90 Ãë£©..."
+# ============================================================
+#  [3/5] é¢„çƒ­
+# ============================================================
+Write-Step "[3/5] é¢„çƒ­æ¨¡å‹ '$model'ï¼ˆé¦–æ¬¡å¯èƒ½ 30-90 ç§’ï¼‰..."
 
 $body = @{
     model  = $model
@@ -321,51 +657,45 @@ try {
     Write-OK "Warmup OK"
 } catch {
     Write-Err "WARMUP FAILED: $($_.Exception.Message)"
-    Write-Warn "³£¼ûÔ­Òò£ºÏÔ´æ²»×ã / Ä£ĞÍÎÄ¼şËğ»µ / ÉÏ´Î½ø³ÌÎ´³¹µ×ÍË³ö"
-    Write-Warn "ÅÅÕÏ£º"
-    Write-Warn "  1. ollama ps              # ¿´ÊÇ·ñ¼ÓÔØ³É¹¦"
-    Write-Warn "  2. ollama logs            # ¿´ Ollama ÈÕÖ¾"
-    Write-Warn "  3. ½µµÍ num_ctx£º/set num_ctx 8192"
+    Write-Warn "å¸¸è§åŸå› ï¼šæ˜¾å­˜ä¸è¶³ / æ¨¡å‹æ–‡ä»¶æŸå / ä¸Šæ¬¡è¿›ç¨‹æœªå½»åº•é€€å‡º"
+    Write-Warn "æ’æŸ¥ï¼š"
+    Write-Warn "  1. ollama ps              # çœ‹æ˜¯å¦åŠ è½½æˆåŠŸ"
+    Write-Warn "  2. é™ä½ num_ctxï¼š/set num_ctx 8192"
+    Write-Warn "  3. çœ‹ stderr æ—¥å¿—ï¼š$stderrLog"
+    Write-Warn "  4. ç¡®è®¤æ¨¡å‹ç›®å½•ï¼š$env:OLLAMA_MODELS"
 }
 
 Write-Host ""
 Write-Host "----- Ollama GPU status -----" -ForegroundColor Cyan
-$psOutput = ollama ps 2>&1 | Out-String
+$psOutput = ""
+try { $psOutput = (& $ollamaExe ps 2>&1 | Out-String) } catch { $psOutput = "(ollama ps æ‰§è¡Œå¤±è´¥)" }
 Write-Host $psOutput
 Write-Host "-----------------------------" -ForegroundColor Cyan
-
 if ($psOutput -match "100% GPU") {
     Write-OK "Model is running 100% on GPU."
 } else {
-    Write-Warn "Model is NOT running 100% on GPU£¨¿ÉÄÜ CPU Ä£Ê½»ò¼ÓÔØÊ§°Ü£©"
+    Write-Warn "Model is NOT running 100% on GPU"
 }
 Write-Host ""
 
-# ===== 7. Æô¶¯ Agent =====
-Write-Step "[4/4] Æô¶¯ Kurama Agent..."
+# ============================================================
+#  [4/5] å¯åŠ¨ Agent
+# ============================================================
+Write-Step "[4/5] å¯åŠ¨ Kurama Agent..."
 
 $pythonExe = Join-Path $PSScriptRoot "venv\Scripts\python.exe"
-$agentPy   = Join-Path $PSScriptRoot "agent.py"
-
 if (-not (Test-Path $pythonExe)) {
-    Write-Err "ÕÒ²»µ½ venv python£º$pythonExe"
-    Write-Warn "ÇëÏÈ´´½¨ venv£ºpython -m venv venv"
-    Read-Host "°´»Ø³µÍË³ö"
-    exit 1
-}
-if (-not (Test-Path $agentPy)) {
-    Write-Err "ÕÒ²»µ½ agent.py£º$agentPy"
-    Read-Host "°´»Ø³µÍË³ö"
+    Write-Err "æ‰¾ä¸åˆ° venv pythonï¼š$pythonExe"
+    Read-Host "æŒ‰å›è½¦é€€å‡º"
     exit 1
 }
 
-& $pythonExe -u $agentPy
+& $pythonExe -u -m src.agent
 
 Write-Host ""
-Write-Host "Agent ÒÑÍË³ö¡£" -ForegroundColor Cyan
+Write-Host "Agent å·²é€€å‡ºã€‚" -ForegroundColor Cyan
 
-# Agent ÍË³öºó£¬Ë³±ãÇåÀíÒ»´Î Ollama£¬·ÀÖ¹²ĞÁô
-Write-Step "Agent ÍË³öºóÇåÀí Ollama ½ø³Ì..."
+Write-Step "[5/5] Agent é€€å‡ºåæ¸…ç† Ollama è¿›ç¨‹..."
 Clear-OllamaProcesses -MaxWaitSeconds 30 -SharedMemWarnGB 3.0 | Out-Null
 
-Read-Host "°´»Ø³µ¼ü¹Ø±Õ´°¿Ú"
+Read-Host "æŒ‰å›è½¦å…³é—­çª—å£"
